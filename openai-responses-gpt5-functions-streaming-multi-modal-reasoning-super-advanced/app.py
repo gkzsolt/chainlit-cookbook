@@ -8,6 +8,7 @@ import os
 import json
 import base64
 from typing import List, Dict, Any, Optional
+from pathlib import Path
 
 from openai import AsyncOpenAI
 import chainlit as cl
@@ -28,6 +29,7 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 MAX_ITER = 20
 DEV_PROMPT = "Talk in Ned Flanders style. You are a helpful assistant with access to local Python execution, web search, image generation, file search, and file upload capabilities. You can upload files to a persistent Python workspace and analyze them with code. IMPORTANT: When you see function calls for 'upload_file_to_workspace' or 'list_workspace_files' in the conversation history, acknowledge what files were uploaded or are available. Always check your recent function call results to understand what the user has done. Use tools when needed."
+
 # ─────────────────── Session Management ─────────────────────────────────────
 @cl.on_chat_start
 async def _start():
@@ -50,6 +52,7 @@ async def _start():
     cl.user_session.set("tool_results", {})
     cl.user_session.set("vector_store_id", None)
     cl.user_session.set("dev_prompt", DEV_PROMPT)
+    
     # Ask about file upload for search capabilities
     upload_choice = await cl.AskActionMessage(
         content="Would you like to upload files for search capabilities?",
@@ -59,7 +62,7 @@ async def _start():
         ],
     ).send()
 
-    if upload_choice and upload_choice.get("value") == "upload":
+    if upload_choice and upload_choice['payload'].get("value") == "upload":
         files = await cl.AskFileMessage(
             content="Upload files to search through:",
             accept=["text/plain", "application/pdf", ".txt", ".md", ".py", ".js", ".html", ".css"],
@@ -69,22 +72,22 @@ async def _start():
 
         if files and len(files) > 0:
             try:
+                print("Uploading files to client vector store")
                 # Create vector store for file search
                 vector_store = await client.vector_stores.create(name="Chat Files")
                 uploaded_files = []
-                
-                for file in files:
-                    uploaded_file = await client.files.create(
-                        file=file.content, 
-                        purpose="file-search"
-                    )
-                    uploaded_files.append(uploaded_file.id)
-                
-                await client.vector_stores.files.create_many(
-                    vector_store_id=vector_store.id, 
-                    file_ids=uploaded_files
+
+                # Upload files directly to the vector store
+                file_paths = [Path(file.path) for file in files]
+
+                batch = await client.vector_stores.file_batches.upload_and_poll(
+                    vector_store_id=vector_store.id,
+                    files=file_paths,
                 )
-                
+
+                # print(f"File upload status: {batch.status}")
+                # print(f"File counts: {batch.file_counts}")
+
                 cl.user_session.set("vector_store_id", vector_store.id)
                 await cl.Message(
                     f"Uploaded {len(files)} files for search!", 
